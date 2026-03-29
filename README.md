@@ -1,1 +1,60 @@
-🚀 Project: FPGA UART Byte Transmitter (V2.0)📌 1. Project OverviewThis project implements a Serial Communication Interface on an FPGA. Its job is to take 8 bits of data (Parallel) and send them one by one (Serial) over a single wire to a PC at a specific speed (9600 Baud).The Evolution:Version 1 (Heartbeat): Automatically sent data every 1 second using an internal timer.Version 2 (Command-Response): This version is "Event-Driven." It sits idle until a Send_Go pulse is received, then signals Tx_Done when finished.⚙️ 2. The Core Logic (Hardware Architecture)2.1 The Math (Baud Rate Generation)The FPGA clock runs at 50 MHz (50,000,000 cycles per second). To talk to a PC at 9600 Baud, we need to know how many clock cycles to hold each bit.$$\text{Ticks per Bit} = \frac{50,000,000 \text{ Hz}}{9,600 \text{ Baud}} \approx 5208$$In the code, we use MCNT_BAUD = 5208 - 1. We subtract 1 because digital counters start at 0.2.2 The Handshake SignalsSend_Go (Input): The "Trigger." A 1-clock-cycle pulse that tells the UART to start.r_Data (Internal Latch): The "Snapshot." The moment Send_Go hits, we copy the input Data into r_Data. This prevents the data from changing mid-transmission (data corruption).en_baud_cnt (Internal Enable): The "Power Switch." It turns on when Send_Go is detected and stays on until the 10th bit is finished.Tx_Done (Output): The "Feedback." A pulse that tells the CPU, "I am finished; send the next byte whenever you are ready."📂 3. File Structure & Key Modulesuart_byte_tx.v (The Peripheral)This contains the Finite State Machine (FSM) logic.Baud Counter: Ticks from 0 to 5207 to create the timing for one bit.Bit Counter: Ticks from 0 to 9 to track which bit of the frame we are on.Multiplexer (The Case Statement): Based on the bit_cnt, it selects:0: Start Bit (Logic 0)1-8: Data Bits (LSB to MSB)9: Stop Bit (Logic 1)🧪 4. Simulation & Verification (The Testbench)4.1 Why we use defparamSimulating a 1-second delay at 50MHz takes forever for a computer to calculate. In the testbench (uart_byte_tx_tb.v), we "cheat" using defparam:defparam dut.MCNT_BAUD = 5 - 1;This makes the bits incredibly skinny (only 5 clock cycles wide) so we can see the whole 10-bit packet in a few hundred nanoseconds.4.2 The Simulation FlowReset: Reset_n goes low to clear all registers, then high to start.Trigger: Testbench sets Data = 8'h55 and pulses Send_Go = 1 for 20ns.Observation: Watch the uart_tx line. It should stay at 1 (Idle), then drop to 0 (Start), then wiggle (Data), then return to 1 (Stop).Completion: Look for the Tx_Done pulse at the end. This confirms the hardware logic successfully reached the end of the frame.🛠 5. How to Run (Step-by-Step)Open Vivado: Open your project uart_byte_tx_pri.Check Sources: Ensure uart_byte_tx.v is under Design Sources and uart_byte_tx_tb.v is under Simulation Sources.Launch Simulation: Click Run Simulation -> Run Behavioral Simulation.Set Time: In the top toolbar, type 10 us and click the Run for... (Play-T) button.Zoom Fit: Click the "Zoom Fit" icon to see the waveforms.📝 6. Lessons Learned (Critical Notes)Case Sensitivity: Clk is not the same as clk. Always use consistent casing.Bit Widths: Ensure counters (like baud_div_cnt) are large enough (e.g., [29:0]) to hold the maximum count value.Asynchronous Reset: Always use if(!Reset_n) at the start of every always block to ensure the hardware starts in a known state.
+# UART Byte Transmitter (Version 2.0)
+
+## 📖 Project Overview
+This module is a **Universal Asynchronous Receiver-Transmitter (UART)** designed for FPGA systems. It converts 8-bit parallel data into a serial bitstream to communicate with a PC or another microcontroller at a standard **9600 Baud Rate**.
+
+### Key Evolution: The Handshake Model
+Earlier versions used a fixed 1-second timer ("Heartbeat"). This version implements an **Asynchronous Handshake**, meaning it only sends data when requested by an external signal (`Send_Go`) and provides feedback when finished (`Tx_Done`).
+
+---
+
+## ⚙️ Hardware Specifications
+* **System Clock:** 50 MHz (20ns period)
+* **Baud Rate:** 9600 bps
+* **Data Frame:** 10 bits (1 Start bit, 8 Data bits, 1 Stop bit)
+* **Parity:** None
+* **Bit Order:** LSB (Least Significant Bit) First
+
+### The Math (Baud Generation)
+To achieve 9600 Baud on a 50 MHz clock, we calculate the number of clock ticks per bit:
+**Ticks = 50,000,000 Hz / 9,600 bps = 5208.33...**
+
+The hardware uses a counter (`MCNT_BAUD`) that counts from **0 to 5207**.
+
+---
+
+## 🔌 Interface Signals
+
+| Signal | Direction | Type | Description |
+| :--- | :--- | :--- | :--- |
+| Clk | Input | Wire | 50MHz System Clock |
+| Reset_n | Input | Wire | Active-Low Reset (0 = Reset) |
+| Send_Go | Input | Wire | Trigger pulse (1 cycle) to start transmission |
+| Data[7:0] | Input | Wire | The 8-bit byte to be sent |
+| uart_tx | Output | Reg | The physical serial output wire (Idle = 1) |
+| Tx_Done | Output | Reg | High for 1 cycle when transmission finishes |
+
+---
+
+## 🏗️ Internal Architecture
+
+### 1. Data Latching (The Snapshot)
+To prevent data corruption, the module captures the `Data` input into an internal register `r_Data` the exact moment `Send_Go` is pulsed. This allows the external system to change the data wires immediately without affecting the ongoing slow serial process.
+
+### 2. The State Metronome
+* **Baud Counter:** A 13-bit counter that pulses every 5208 clock cycles.
+* **Bit Counter:** A 4-bit counter that tracks the 10-bit frame (0 = Start, 1-8 = Data, 9 = Stop).
+
+### 3. Output Multiplexing
+A `case` statement acts as a digital switch, routing the correct bit to the `uart_tx` pin based on the `bit_cnt`.
+
+---
+
+## 🧪 Simulation & Verification
+
+### The `defparam` Technique
+Because simulating a 9600 Baud rate takes millions of nanoseconds, the Testbench (`uart_byte_tx_tb.v`) uses `defparam` to override the timing constants for faster simulation:
+
+```verilog
+defparam dut.MCNT_BAUD = 5 - 1; // 5 ticks per bit for fast simulation
+
